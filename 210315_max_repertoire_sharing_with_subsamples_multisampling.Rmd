@@ -1,0 +1,165 @@
+---
+title: "210315_max_repertoire_sharing_with_subsamples_multisampling"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load libraries and set WD
+```{r load libraries, message=FALSE}
+library(SingleCellExperiment)
+library(ggplot2)
+library(pheatmap)
+library(ggsci)
+library(scales)
+library(scater)
+library(Matrix)
+library(circlize)
+library(viridis)
+
+setwd("//central-cluster/algroup/Orian Bricard/201130_ORB596_Oliver_2019_Tissue_treg_10x_GE_VDJ_FB_reanalysis/R/210315_max_repertoire_sharing_with_subsamples_multisampling")
+
+```
+
+## Define functions
+```{r define functions}
+
+
+```
+
+## Define Colors
+```{r define color code}
+#show_col(pal_npg("nrc")(10))
+mouseId_color = c("ALFX24_1b" = pal_npg("nrc")(10)[1], "ALFX24_1c" = pal_npg("nrc")(10)[2], "ALFX24_1d" = pal_npg("nrc")(10)[3], "ALFX24_1e" = pal_npg("nrc")(10)[4])
+tissue_origin_color = c("Blood" = pal_npg("nrc")(10)[8],"Kidney"= pal_npg("nrc")(10)[6], "LPL" = pal_npg("nrc")(10)[5], "Liver" = "#A52A2AFF", "Pancreas"  = pal_npg("nrc")(10)[10] )
+```
+
+
+## Load data
+```{r load data}
+
+sce = readRDS("//central-cluster/algroup/Orian Bricard/201130_ORB596_Oliver_2019_Tissue_treg_10x_GE_VDJ_FB_reanalysis/R/210126_strict_data_preprocessing/tgtfsce.rds")
+```
+
+## Create TCR subsample repertoires depending of mouse and tissue origin
+```{r create TCR repertoires}
+
+colData(sce)$tcr_full = paste(colData(sce)$hit1_TRA_v_gene, colData(sce)$hit1_TRA_cdr3_nt, colData(sce)$hit1_TRA_j_gene, 
+                              colData(sce)$hit1_TRB_v_gene, colData(sce)$hit1_TRB_cdr3_nt, colData(sce)$hit1_TRB_j_gene)
+##table(!(grepl("None",colData(sce)$hit1_TRB_cdr3_nt, fixed = TRUE))) ## contains TRB CDR3 NT
+table(!(grepl("None",colData(sce)$tcr_full, fixed = TRUE) & grepl("NA",colData(sce)$tcr_full, fixed = TRUE))) ## contains TRA and TRB, V J and CDR3 NT
+
+tcr_rep = as.data.frame(colData(sce[,!(grepl("None",colData(sce)$tcr_full, fixed = TRUE) & grepl("NA",colData(sce)$tcr_full, fixed = TRUE))])[,c("tcr_full" ,"mouseId", "tissue_origin")])
+
+tcr_rep = tcr_rep[order(tcr_rep$mouseId),]
+tcr_rep = tcr_rep[order(tcr_rep$tissue_origin),]
+
+for(subsample_n in c(50,100,130)){
+
+IC95df = data.frame(vs = character(), mean = double(),lowIC95 = double(), highIC95 = double())
+
+c=1
+for (xtissue in unique(tcr_rep$tissue_origin)){
+  for (ytissue in unique(tcr_rep$tissue_origin)){
+
+    group_x_rep = tcr_rep[tcr_rep$mouseId == "ALFX24_1b" & tcr_rep$tissue_origin == xtissue ,]
+    group_y_rep = tcr_rep[tcr_rep$mouseId == "ALFX24_1b" & tcr_rep$tissue_origin == ytissue ,]
+    
+    
+    group_x_shared_count_fraction_vector = vector()
+    
+    for (r in 1:100){  ### repeat sampling 100 times
+    
+      ## Randomize subsample
+      if(xtissue == ytissue){
+        rand = sample(1:dim(group_x_rep)[1])[1:subsample_n]
+        rand_group_x_rep = group_x_rep[rand,]
+        rand_group_y_rep = group_y_rep[sample((1:dim(group_y_rep)[1])[-rand])[1:subsample_n],]
+      } else{
+      rand_group_x_rep = group_x_rep[sample(1:dim(group_x_rep)[1])[1:subsample_n],]
+      rand_group_y_rep = group_y_rep[sample(1:dim(group_y_rep)[1])[1:subsample_n],]
+      }
+      
+      ## Get count per TCR
+      rand_group_x_rep_wttcount = data.frame(tcr_full=unique(rand_group_x_rep$tcr_full))
+      for(i in 1:dim(rand_group_x_rep_wttcount)[1] ){
+        rand_group_x_rep_wttcount$count[i] = sum(rand_group_x_rep$tcr_full == rand_group_x_rep_wttcount$tcr_full[i] )
+      }
+      rand_group_x_rep_wttcount = rand_group_x_rep_wttcount[order(-rand_group_x_rep_wttcount$count),]
+      
+      rand_group_y_rep_wttcount = data.frame(tcr_full=unique(rand_group_y_rep$tcr_full))
+      for(i in 1:dim(rand_group_y_rep_wttcount)[1] ){
+        rand_group_y_rep_wttcount$count[i] = sum(rand_group_y_rep$tcr_full == rand_group_y_rep_wttcount$tcr_full[i] )
+      }
+      rand_group_y_rep_wttcount = rand_group_y_rep_wttcount[order(-rand_group_y_rep_wttcount$count),]
+      
+      ## Get x vs y sharing
+      
+      shared_group_x_group_y  = merge(rand_group_x_rep_wttcount, rand_group_y_rep_wttcount, by = "tcr_full")
+      
+      group_x_shared_count_fraction = sum(shared_group_x_group_y$count.x)/sum(rand_group_x_rep_wttcount$count)
+      group_y_shared_element_fraction = dim(shared_group_x_group_y)[1]/dim(rand_group_x_rep_wttcount)[1]
+      
+      group_x_shared_count_fraction_vector = c(group_x_shared_count_fraction_vector,group_x_shared_count_fraction)
+    }
+    
+    
+    mean = sum(group_x_shared_count_fraction_vector)/length(group_x_shared_count_fraction_vector)
+    sd = sd(group_x_shared_count_fraction_vector)
+    IC95 = c(mean-1.96*sd, mean+1.96*sd)
+    
+    IC95df[c,] = c(paste(xtissue, ytissue),mean, IC95)
+    c= c+1
+  }
+}
+IC95df$vs = factor(IC95df$vs, level=rev(IC95df$vs))
+IC95df$mean = as.double(IC95df$mean)
+IC95df$lowIC95 = as.double(IC95df$lowIC95)
+IC95df$highIC95 = as.double(IC95df$highIC95)
+
+ggplot(data = IC95df) +
+  scale_x_continuous(name = paste0("Sharing fraction based on 100 subsampling of ", subsample_n, " cells (IC95%)"), position = "top")+
+  geom_point(aes(x = mean, y = vs))+
+  #geom_segment(aes(x=lowIC95, y=vs, xend=highIC95, yend=vs), color = "black")+
+  geom_errorbar(aes(x = mean, y = vs, xmin=lowIC95, xmax=highIC95), width=.5)+
+  theme_bw()
+ggsave(paste0("Sharing_fraction_based_on_100_subsampling_of_", subsample_n, "_cells.pdf"),  width = 15, height = 21 , units = "cm", useDingbats=FALSE)
+}
+
+IC95df$vs = as.vector(IC95df$vs)
+IC95df$x = as.data.frame(t(as.data.frame(strsplit(IC95df$vs, " "))))[,1]
+IC95df$y = as.data.frame(t(as.data.frame(strsplit(IC95df$vs, " "))))[,2]
+
+for(i in 1:dim(IC95df)[1]){
+
+  IC95df$norm_value[i] = IC95df$mean[i]/IC95df$mean[IC95df$x==IC95df$x[i] & IC95df$y==IC95df$x[i] ]
+}
+
+IC95df$vs = factor(IC95df$vs, level=rev(IC95df$vs))
+
+ggplot(data = IC95df) +
+  scale_x_continuous(name = paste0("Relative sharing based on 100 subsampling of ", subsample_n, " cells"), position = "top")+
+  scale_fill_manual(values= tissue_origin_color)+
+  geom_bar(aes(x = norm_value, y = vs, fill = x), stat = "identity")+
+  theme_bw()+
+  theme(panel.grid.minor = element_blank())
+ggsave(paste0("Relative_sharing_based_on_100_subsampling_of_", subsample_n, "_cells.pdf"),  width = 15, height = 15 , units = "cm", useDingbats=FALSE)
+
+ggplot(data = IC95df[IC95df$x != IC95df$y,]) +
+  scale_x_continuous(name = paste0("Relative sharing based on 100 subsampling of ", subsample_n, " cells"), position = "top")+
+  scale_fill_manual(values= tissue_origin_color)+
+  geom_bar(aes(x = norm_value, y = vs, fill = x), stat = "identity")+
+  theme_bw()+
+  theme(panel.grid.minor = element_blank())
+ggsave(paste0("Relative_sharing_based_on_100_subsampling_of_", subsample_n, "_cells_no_same.pdf"),  width = 15, height = 13 , units = "cm", useDingbats=FALSE)
+
+
+
+sessionInfo()
+```
+
+
+
+ 

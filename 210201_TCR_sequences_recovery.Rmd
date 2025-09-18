@@ -1,0 +1,236 @@
+---
+title: "210201_TCR_sequences_recovery"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load libraries and set WD
+```{r load libraries, message=FALSE}
+library(Biostrings)  # mask strsplit
+library(stringr)
+library(xlsx)
+
+wd = "//central-cluster/algroup/Orian Bricard/201130_ORB596_Oliver_2019_Tissue_treg_10x_GE_VDJ_FB_reanalysis/R/210201_TCR_sequences_recovery"
+setwd(wd)
+
+```
+
+## Create output dirs
+```{r output dirs}
+dir.create("fasta")
+dir.create("embl")
+```
+
+
+## Load data
+```{r load data}
+TOIdf = read.delim("TOI.tsv")  #  − is expected to be saved as ?
+
+xref = readDNAStringSet("//central-cluster/algroup/Orian Bricard/201130_ORB596_Oliver_2019_Tissue_treg_10x_GE_VDJ_FB_reanalysis/RefSeq/refdata-cellranger-vdj-GRCm38-alts-ensembl-5.0.0/fasta/regions.fa")
+
+```
+
+
+## Format ref
+```{r Format ref}
+
+refdf = data.frame(desc = names(xref),seq =paste(xref))
+
+for(i in 1:dim(refdf)[1]){
+  refdf$shortId[i] = strsplit(refdf$desc[i], "|", fixed = TRUE)[[1]][3]
+  refdf$region[i] = strsplit(refdf$desc[i], "|", fixed = TRUE)[[1]][4]
+}
+
+```
+
+
+## Define pre and post fragment sequences
+```{r Define pre and post fragment sequences}
+#fragment_adapter_version = "GGA_BbsI_cloning"
+#TRAVDJ_fragment_pre = "AATCACGAAGACTTCGAAGCCACC" # Buffer seq	BbsI GGA	Kozak
+#TRAVDJ_fragment_post = "ACATAAGTCTTCTCTCTA" # BbsI(rev)	Buffer seq
+#TRBVDJ_fragment_pre ="AATCACGAAGACTTTCCC" # Buffer seq	BbsI
+#TRBVDJ_fragment_post= "AGGAAAGTCTTCTCTCTA" #BbsI(rev)	Buffer seq
+
+fragment_adapter_version = "Gibson_cloning"
+TRAVDJ_fragment_pre = "CCTCACTCCTTCTCTAGGCGCCGGAATTCGCCACC" # up-EcoRI 24nt homology - Kozak
+TRAVDJ_fragment_post = "ACATCCAGAACCCAGAACCTGCTG" # TRAC 24nt homology
+TRBVDJ_fragment_pre ="GACGTGGAAGAAAACCCCGGTCCC" # P2A 24nt homology
+TRBVDJ_fragment_post= "AGGATCTGAGAAATGTGACTCCAC" # TRBC 24nt homology
+
+
+
+
+
+```
+
+## eBlock order sheet
+```{r eBlock order sheet}
+
+eblocksdf = data.frame( Well_Position = character(), Name = character(), Sequence = character())
+colnames_eblocksdf = colnames(eblocksdf)
+Well_Position_order = c(paste0(rep(c("A","B","C","D","E","F","G","H"), each = 2), rep(1:2, times = 8)),
+                       paste0(rep(c("A","B","C","D","E","F","G","H"), each = 2), rep(3:4, times = 8)),
+                       paste0(rep(c("A","B","C","D","E","F","G","H"), each = 2), rep(5:6, times = 8)),
+                       paste0(rep(c("A","B","C","D","E","F","G","H"), each = 2), rep(7:8, times = 8)),
+                       paste0(rep(c("A","B","C","D","E","F","G","H"), each = 2), rep(9:10, times = 8)),
+                       paste0(rep(c("A","B","C","D","E","F","G","H"), each = 2), rep(11:12, times = 8)))
+```
+
+
+## Process each TOI
+```{r Process each TOI}
+
+for (n in 1:dim(TOIdf)[1]){ 
+  
+  ## Format TCR of interest
+  TOI_name = TOIdf[n,"name"]
+  TOI = TOIdf[n,"TCR_full"]
+  
+  TOI = gsub( "−","-", TOI)  # Solve - != − problem
+  TOI = gsub( "\\?","-", TOI)  # Solve ? problem
+  
+  TRAVId = strsplit(TOI, " ", fixed = TRUE)[[1]][1]
+  TRAJId = strsplit(TOI, " ", fixed = TRUE)[[1]][3]
+  TRBVId = strsplit(TOI, " ", fixed = TRUE)[[1]][4]
+  TRBJId = strsplit(TOI, " ", fixed = TRUE)[[1]][6]
+  
+  TRAVseq = refdf[refdf$shortId == TRAVId & refdf$region == "L-REGION+V-REGION","seq"]
+  TRAJseq = refdf[refdf$shortId == TRAJId,"seq"]
+  TRACseq = refdf[refdf$shortId == "TRAC","seq"]
+  TRACDR3seq = strsplit(TOI, " ", fixed = TRUE)[[1]][2]
+  TRBVseq = refdf[refdf$shortId == TRBVId & refdf$region == "L-REGION+V-REGION","seq"]
+  TRBJseq = refdf[refdf$shortId == TRBJId,"seq"]
+  TRBCDR3seq = strsplit(TOI, " ", fixed = TRUE)[[1]][5]
+  
+  
+  ##########TRA
+  
+  ## Find TRAV TRAVCDR3 overlap and get truncated TRAV
+  TRAV_overlap = ""
+  for(i in 1:nchar(TRACDR3seq)){
+    frag = substr(TRACDR3seq, 1, i)
+    TRAVseq_end = substr(TRAVseq, nchar(TRAVseq)-50, nchar(TRAVseq))
+    if (grepl(frag, TRAVseq_end, fixed = TRUE)){
+    TRAV_overlap = frag
+    }
+  }
+  TRAV_overlap_loc = str_locate_all(pattern = TRAV_overlap, TRAVseq)[[1]]
+  truncTRAVseq = substr(TRAVseq, 1, TRAV_overlap_loc[dim(TRAV_overlap_loc)[1],"start"]-1)
+  
+  ## Find TRAJ TRAVCDR3 overlap and get truncated TRAJ
+  TRAJ_overlap = ""
+  for(i in 1:nchar(TRACDR3seq)){
+    frag = substr(TRACDR3seq, nchar(TRACDR3seq)-i+1, nchar(TRACDR3seq))
+    if (grepl(frag, TRAJseq, fixed = TRUE)){
+    TRAJ_overlap = frag
+    }
+  }
+  TRAJ_overlap_loc = str_locate_all(pattern = TRAJ_overlap, TRAJseq)[[1]]
+  truncTRAJseq = substr(TRAJseq, TRAJ_overlap_loc[dim(TRAJ_overlap_loc)[1],"end"]+1, nchar(TRAJseq))
+  
+  ## Get TRAVDJ fragment
+  TRAVDJ_fragment = paste0(TRAVDJ_fragment_pre, truncTRAVseq, TRACDR3seq, truncTRAJseq, TRAVDJ_fragment_post)
+  
+  ## Write TRA fasta
+  fileConn = file(paste0("./fasta/",TOI_name, "_TRAVDJ_fragment_", fragment_adapter_version,".fasta"))
+  writeLines( c(paste0(">",TOI_name,"_TRAVDJ_fragment"),
+                TRAVDJ_fragment), fileConn)
+  close(fileConn)
+  
+  ## Write TRA embl
+  fileConn = file(paste0("./embl/",TOI_name, "_TRAVDJ_fragment_", fragment_adapter_version,".embl"))
+  writeLines( c(paste0("ID ", TOI_name, "_TRAVDJ_fragment_", fragment_adapter_version, "; SV; linear; genomic DNA; STD; SYN; ", nchar(TRAVDJ_fragment), " BP."  ),
+                "XX",
+                paste0("FT CDS ", nchar(TRAVDJ_fragment_pre)+1, "..", nchar(TRAVDJ_fragment)-nchar(TRAVDJ_fragment_post)),
+                paste0("FT  /label=", TOI_name, "_","TRAVDJ"),
+                paste0("FT misc_feature ", nchar(TRAVDJ_fragment_pre)+1, "..", nchar(TRAVDJ_fragment_pre)+nchar(truncTRAVseq) ),
+                paste0("FT  /label=", TRAVId),
+                paste0("FT misc_feature ", nchar(TRAVDJ_fragment_pre)+1+nchar(truncTRAVseq), "..", nchar(TRAVDJ_fragment_pre)+nchar(truncTRAVseq)+nchar(TRACDR3seq) ),
+                paste0("FT  /label=", "CDR3"),
+                paste0("FT misc_feature ", nchar(TRAVDJ_fragment_pre)+1+nchar(truncTRAVseq)+nchar(TRACDR3seq), "..", nchar(TRAVDJ_fragment)-nchar(TRAVDJ_fragment_post) ),
+                paste0("FT  /label=", TRAJId),
+                "XX",
+                "SQ Sequence ;",
+                TRAVDJ_fragment,
+                "//"), fileConn)
+  close(fileConn)
+
+  ## Add to eblocks plate
+  eblock_index =dim(eblocksdf)[1]+1
+  eblocksdf = rbind(eblocksdf, c(Well_Position_order[eblock_index], paste0(TOI_name, "_TRAVDJ_fragment_", fragment_adapter_version), TRAVDJ_fragment))
+  
+  
+  ##########TRB
+  
+  ## Find TRBV TRBVCDR3 overlap and get truncated TRBV
+  TRBV_overlap = ""
+  for(i in 1:nchar(TRBCDR3seq)){
+    frag = substr(TRBCDR3seq, 1, i)
+    TRBVseq_end = substr(TRBVseq, nchar(TRBVseq)-50, nchar(TRBVseq))
+    if (grepl(frag, TRBVseq_end, fixed = TRUE)){
+    TRBV_overlap = frag
+    }
+  }
+  TRBV_overlap_loc = str_locate_all(pattern = TRBV_overlap, TRBVseq)[[1]]
+  truncTRBVseq = substr(TRBVseq, 1, TRBV_overlap_loc[dim(TRBV_overlap_loc)[1],"start"]-1)
+  
+  ## Find TRBJ TRBVCDR3 overlap and get truncated TRBJ
+  TRBJ_overlap = ""
+  for(i in 1:nchar(TRBCDR3seq)){
+    frag = substr(TRBCDR3seq, nchar(TRBCDR3seq)-i+1, nchar(TRBCDR3seq))
+    if (grepl(frag, TRBJseq, fixed = TRUE)){
+    TRBJ_overlap = frag
+    }
+  }
+  TRBJ_overlap_loc = str_locate_all(pattern = TRBJ_overlap, TRBJseq)[[1]]
+  truncTRBJseq = substr(TRBJseq, TRBJ_overlap_loc[dim(TRBJ_overlap_loc)[1],"end"]+1, nchar(TRBJseq))
+  
+
+  ## Get TRBVDJ fragment
+  TRBVDJ_fragment = paste0(TRBVDJ_fragment_pre, truncTRBVseq, TRBCDR3seq, truncTRBJseq, TRBVDJ_fragment_post)
+  
+  ## Write TRB fasta
+  fileConn = file(paste0("./fasta/",TOI_name, "_TRBVDJ_fragment_", fragment_adapter_version,".fasta"))
+  writeLines( c(paste0(">",TOI_name,"_TRBVDJ_fragment_", fragment_adapter_version),
+                TRBVDJ_fragment), fileConn)
+  close(fileConn)
+  
+  ## Write TRB embl
+  fileConn = file(paste0("./embl/",TOI_name, "_TRBVDJ_fragment_", fragment_adapter_version,".embl"))
+  writeLines( c(paste0("ID ", TOI_name, "_TRBVDJ_fragment_", fragment_adapter_version, "; SV; linear; genomic DNA; STD; SYN; ", nchar(TRBVDJ_fragment), " BP."  ),
+                "XX",
+                paste0("FT CDS ", nchar(TRBVDJ_fragment_pre)+1, "..", nchar(TRBVDJ_fragment)-nchar(TRBVDJ_fragment_post)),
+                paste0("FT  /label=", TOI_name, "_","TRBVDJ"),
+                paste0("FT misc_feature ", nchar(TRBVDJ_fragment_pre)+1, "..", nchar(TRBVDJ_fragment_pre)+nchar(truncTRBVseq) ),
+                paste0("FT  /label=", TRBVId),
+                paste0("FT misc_feature ", nchar(TRBVDJ_fragment_pre)+1+nchar(truncTRBVseq), "..", nchar(TRBVDJ_fragment_pre)+nchar(truncTRBVseq)+nchar(TRBCDR3seq) ),
+                paste0("FT  /label=", "CDR3"),
+                paste0("FT misc_feature ", nchar(TRBVDJ_fragment_pre)+1+nchar(truncTRBVseq)+nchar(TRBCDR3seq), "..", nchar(TRBVDJ_fragment)-nchar(TRBVDJ_fragment_post) ),
+                paste0("FT  /label=", TRBJId),
+                "XX",
+                "SQ Sequence ;",
+                TRBVDJ_fragment,
+                "//"), fileConn)
+  close(fileConn)
+  
+  
+  ## Add to eblocks plate
+  eblock_index =dim(eblocksdf)[1]+1
+  eblocksdf = rbind(eblocksdf, c(Well_Position_order[eblock_index], paste0(TOI_name, "_TRBVDJ_fragment_", fragment_adapter_version), TRBVDJ_fragment))
+
+}
+
+colnames(eblocksdf) = colnames_eblocksdf 
+write.xlsx(eblocksdf,"eblocks_plate_order.xlsx", row.names = FALSE)
+
+
+
+sessionInfo()
+```
+
+
+

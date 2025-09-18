@@ -1,0 +1,950 @@
+---
+title: "210208_strict_repertoire_analysis_for_figure"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load libraries and set WD
+```{r load libraries, message=FALSE}
+library(SingleCellExperiment)
+library(ggplot2)
+library(pheatmap)
+library(ggsci)
+library(scales)
+library(scater)
+library(Matrix)
+library(circlize)
+library(viridis)
+
+setwd("//central-cluster/algroup/Orian Bricard/201130_ORB596_Oliver_2019_Tissue_treg_10x_GE_VDJ_FB_reanalysis/R/210208_strict_repertoire_analysis_for_figure")
+
+```
+
+## Define functions
+```{r define functions}
+
+
+```
+
+## Define Colors
+```{r define color code}
+#show_col(pal_npg("nrc")(10))
+mouseId_color = c("ALFX24_1b" = pal_npg("nrc")(10)[1], "ALFX24_1c" = pal_npg("nrc")(10)[2], "ALFX24_1d" = pal_npg("nrc")(10)[3], "ALFX24_1e" = pal_npg("nrc")(10)[4])
+tissue_origin_color = c("Blood" = pal_npg("nrc")(10)[8],"Kidney"= pal_npg("nrc")(10)[6], "LPL" = pal_npg("nrc")(10)[5], "Liver" = "#A52A2AFF", "Pancreas"  = pal_npg("nrc")(10)[10] )
+
+
+mouserename = setNames(c("Mouse 1","Mouse 2","Mouse 3","Mouse 4"), c("ALFX24_1b", "ALFX24_1c", "ALFX24_1d" , "ALFX24_1e"))
+```
+
+
+## Load data
+```{r load data}
+
+sce = readRDS("//central-cluster/algroup/Orian Bricard/201130_ORB596_Oliver_2019_Tissue_treg_10x_GE_VDJ_FB_reanalysis/R/210126_strict_data_preprocessing/tgtfsce.rds")
+```
+
+## Create TCR repertoires depending of mouse and tissue origin
+```{r create TCR repertoires}
+
+colData(sce)$tcr_full = paste(colData(sce)$hit1_TRA_v_gene, colData(sce)$hit1_TRA_cdr3_nt, colData(sce)$hit1_TRA_j_gene, 
+                              colData(sce)$hit1_TRB_v_gene, colData(sce)$hit1_TRB_cdr3_nt, colData(sce)$hit1_TRB_j_gene)
+##table(!(grepl("None",colData(sce)$hit1_TRB_cdr3_nt, fixed = TRUE))) ## contains TRB CDR3 NT
+table(!(grepl("None",colData(sce)$tcr_full, fixed = TRUE) & grepl("NA",colData(sce)$tcr_full, fixed = TRUE))) ## contains TRA and TRB, V J and CDR3 NT
+
+tcr_rep = as.data.frame(colData(sce[,!(grepl("None",colData(sce)$tcr_full, fixed = TRUE) & grepl("NA",colData(sce)$tcr_full, fixed = TRUE))])[,c("tcr_full" ,"mouseId", "tissue_origin")])
+tcr_rep$subset = paste(tcr_rep$mouseId, tcr_rep$tissue_origin, sep = "_")
+tcr_rep = tcr_rep[order(tcr_rep$subset),]
+
+tcr_rep_list = vector(mode = "list", length = length(unique(tcr_rep$subset)))  ## create subset tcr repertoires per clonotype in list
+n = 1
+for (subset in unique(tcr_rep$subset)){
+  df = as.data.frame(table(tcr_rep[tcr_rep$subset == subset, "tcr_full"]))
+  colnames(df) = c("tcr_full", paste(subset ,"count", sep = "_"))
+  tcr_rep_list[[n]] = df
+  n = n+1
+}
+
+tcr_rep_per_subset = tcr_rep_list[[1]]        ## fuse elements of the list
+for (i in 2:length(unique(tcr_rep$subset))){
+  tcr_rep_per_subset = merge(tcr_rep_per_subset, tcr_rep_list[[i]], by = "tcr_full", all = TRUE)
+}
+tcr_rep_per_subset[is.na(tcr_rep_per_subset)] = 0
+
+```
+
+## Plot repertoire size and distribution
+```{r Plot repertoire size and distribution}
+dftcrRepSize = data.frame(mouseId = substr(colnames(tcr_rep_per_subset[,-1]), 1,9), tissue_origin = unname(t(as.data.frame(strsplit(colnames(tcr_rep_per_subset[,-1]), "_")))[,3]),   subset = colnames(tcr_rep_per_subset[,-1]), tcr_rep_size = colSums(tcr_rep_per_subset[,-1]))
+ggplot(data = dftcrRepSize) +
+  scale_x_continuous(position = "top") +
+  scale_y_discrete(limits = rev(levels(factor(dftcrRepSize$tissue_origin)))) +
+  scale_fill_manual(values = mouseId_color)+
+  geom_bar(aes(y = tissue_origin, x = tcr_rep_size, fill = mouseId), stat = "identity", position = position_dodge2(padding = 0, reverse = TRUE)) +
+  theme_bw()+
+  theme(panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 0))
+ggsave("tcr_repertoire_size.pdf", width = 8 , height = 6 , useDingbats=FALSE) 
+
+
+## distribution of each subset 
+
+subtcr_rep = tcr_rep_list[[1]][order(tcr_rep_list[[1]][,2], decreasing = TRUE),]
+subtcr_rep$clonotype_rank = seq(1:dim(subtcr_rep)[1])
+subtcr_rep$frequency = subtcr_rep[,2]/sum(subtcr_rep[,2])
+subtcr_rep$mouseId = paste0(strsplit(colnames(subtcr_rep)[2], "_")[[1]][1], "_", strsplit(colnames(subtcr_rep)[2], "_")[[1]][2])
+subtcr_rep$tissue_origin =  strsplit(colnames(subtcr_rep)[2], "_")[[1]][3]
+subtcr_rep$subset_name = colnames(subtcr_rep)[2]
+colnames(subtcr_rep)[2] = "count"
+rowbindtable = subtcr_rep
+
+for(i in 1:length(unique(tcr_rep$subset))){
+subtcr_rep = tcr_rep_list[[i]][order(tcr_rep_list[[i]][,2], decreasing = TRUE),]
+subtcr_rep$clonotype_rank = seq(1:dim(subtcr_rep)[1])
+subtcr_rep$frequency = subtcr_rep[,2]/sum(subtcr_rep[,2])
+subtcr_rep$mouseId = paste0(strsplit(colnames(subtcr_rep)[2], "_")[[1]][1], "_", strsplit(colnames(subtcr_rep)[2], "_")[[1]][2])
+subtcr_rep$tissue_origin =  strsplit(colnames(subtcr_rep)[2], "_")[[1]][3]
+subtcr_rep$subset_name = colnames(subtcr_rep)[2]
+colnames(subtcr_rep)[2] = "count"
+rowbindtable = rbind(rowbindtable,subtcr_rep )
+}
+
+ggplot(data = rowbindtable) +
+  scale_x_log10(name = "Clonotype rank") +
+  scale_y_continuous(name = "Clonotype count", limits = c(0, 20)) +
+  geom_point(aes(x = clonotype_rank , y = count, group = subset_name), shape = 21, size = 2.5, stroke = 0.2) +
+  geom_line(aes(x = clonotype_rank , y = count, group = subset_name)) +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank()) +
+  facet_grid(mouseId ~ tissue_origin)
+ggsave("tcr_repertoire_distribution_linear_count.pdf", width = 29.7 , height = 21 , units = "cm",  useDingbats=FALSE)
+
+ggplot(data = rowbindtable) +
+  scale_x_log10(name = "Clonotype rank") +
+  scale_y_log10(name = "Clonotype count") +
+  geom_point(aes(x = clonotype_rank , y = count, group = subset_name), shape = 21, size = 2.5, stroke = 0.2) +
+  geom_line(aes(x = clonotype_rank , y = count, group = subset_name)) +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank()) +
+  facet_grid(mouseId ~ tissue_origin)
+ggsave("tcr_repertoire_distribution_log10_count.pdf", width = 29.7 , height = 21 , units = "cm",  useDingbats=FALSE)
+
+ggplot(data = rowbindtable) +
+  scale_x_log10(name = "Clonotype rank") +
+  scale_y_continuous(name = "Clonotype frequency (%)", limits = c(0, 5)) +
+  geom_point(aes(x = clonotype_rank , y = frequency*100, group = subset_name), shape = 21, size = 2.5, stroke = 0.2) +
+  geom_line(aes(x = clonotype_rank , y = frequency*100, group = subset_name)) +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank()) +
+  facet_grid(mouseId ~ tissue_origin)
+ggsave("tcr_repertoire_distribution_linear_frequency.pdf", width = 29.7 , height = 21 , units = "cm",  useDingbats=FALSE)
+
+ggplot(data = rowbindtable) +
+  scale_x_log10(name = "Clonotype rank") +
+  scale_y_log10(name = "Clonotype frequency (%)") +
+  geom_point(aes(x = clonotype_rank , y = frequency*100, group = subset_name), shape = 21, size = 2.5, stroke = 0.2) +
+  geom_line(aes(x = clonotype_rank , y = frequency*100, group = subset_name)) +
+  theme_bw() +
+  theme(panel.grid.minor = element_blank()) +
+  facet_grid(mouseId ~ tissue_origin)
+ggsave("tcr_repertoire_distribution_log10_frequency.pdf", width = 29.7 , height = 21 , units = "cm",  useDingbats=FALSE)
+
+
+
+
+## or with heatmap
+
+pd = tcr_rep_per_subset[,-1]
+for (i in 1:dim(pd)[2]){
+  pd[,i] = pd[order(pd[,i], decreasing = TRUE),i]
+}
+pd = pd[rowSums(pd) != 0,]
+fpd = t(t(pd) / as.vector(colSums(tcr_rep_per_subset[,c(-1, -22)])))
+pd[pd == 0] = NA
+fpd[fpd == 0] = NA
+annotation_col = data.frame(mouseId = rep(unique(tcr_rep$mouseId), each = 5), tissue_origin = rep(unique(tcr_rep$tissue_origin),4), cells_per_subset = as.vector(colSums(tcr_rep_per_subset[,c(-1, -22)])) , row.names = colnames(pd) )
+annotation_colors = list(mouseId = mouseId_color, tissue_origin = tissue_origin_color)
+
+
+pheatmap(pd, cluster_rows = FALSE, cluster_cols = FALSE,  annotation_col = annotation_col,  annotation_colors = annotation_colors,  gaps_col = c(5,10,15,20) , show_rownames = FALSE)
+
+pheatmap(log10(fpd+0.001), cluster_rows = FALSE, cluster_cols = FALSE,  annotation_col = annotation_col,  annotation_colors = annotation_colors,  gaps_col = c(5,10,15,20) , show_rownames = FALSE, legend_breaks = c( -2.4 , -2 , log10(0.03)), legend_labels = c( "0.4%", "1%" , "3%"))
+#pheatmap(log10(fpd+0.001), cluster_rows = FALSE, cluster_cols = FALSE,  annotation_col = annotation_col,  annotation_colors = annotation_colors,  gaps_col = c(5,10,15,20) , cellwidth = 8 , cellheight = 8, fontsize_row = 7, main =  "Frequency (heat colors) tcr clonotypes per rank (rows) and per mouse and tissue origin (columns)", legend_breaks = c( -2.4 , -2 , log10(0.03)), legend_labels = c( "0.4%", "1%" , "3%"),  filename = "freq_tcr_clonotype_per_rank_per_subset_pheatmap.pdf")
+```
+
+## Analyse multiSubset tcr clonotypes
+```{r Analyse multiSubset tcr clonotypes}
+
+## Get the number of subset in which each clonotype has been detected (posSubset)
+tcr_rep_per_subset$posSubset = as.numeric(as.logical(tcr_rep_per_subset[,2]))
+for (i in 3:(length(unique(tcr_rep$subset))+1)){
+  tcr_rep_per_subset$posSubset = tcr_rep_per_subset$posSubset + as.numeric(as.logical(tcr_rep_per_subset[,i]))
+}
+
+table(tcr_rep_per_subset$posSubset)  ## count of clonotype represented in indicated subset count
+
+tcr_rep_per_subset = tcr_rep_per_subset[order(tcr_rep_per_subset$posSubset, decreasing =  TRUE),]
+row.names(tcr_rep_per_subset) = tcr_rep_per_subset$tcr_full
+
+p = as.matrix(tcr_rep_per_subset[tcr_rep_per_subset$posSubset >= 2 ,2:(length(unique(tcr_rep$subset))+1)])
+
+annotation_row = data.frame(posSubset = as.character(tcr_rep_per_subset[tcr_rep_per_subset$posSubset >= 2, "posSubset"]), row.names = rownames(tcr_rep_per_subset[tcr_rep_per_subset$posSubset >= 2,]) )
+annotation_col = data.frame(mouseId = rep(unique(tcr_rep$mouseId), each = 5), tissue_origin = rep(unique(tcr_rep$tissue_origin),4), cells_per_subset = as.vector(colSums(tcr_rep_per_subset[,c(-1, -22)])) , row.names = colnames(p) )
+annotation_colors = list(posSubset = c( "2" = "yellow2","3" = "orange1","4" = "orange3", "5" = "firebrick1","6" = "red3", "7" = "darkmagenta", "9" = "purple4" ) , mouseId = mouseId_color, tissue_origin = tissue_origin_color)
+
+pheatmap(p, cluster_rows = FALSE, cluster_cols = FALSE, color = c("lightgrey", "#B9FA9A", rev(plasma(max(p-1)))) ,   annotation_row = annotation_row, annotation_col = annotation_col, annotation_colors = annotation_colors, legend_breaks = 0:max(p), legend_labels = 0:max(p),  gaps_col = c(5,10,15,20), main =  "Number of cell (heat colors) per tcr clonotypes (rows) and per mouse and tissue origin (columns) for multisubsets clonotypes" , show_rownames = FALSE)
+
+#pheatmap(p, cluster_rows = FALSE, cluster_cols = FALSE, color = c("lightgrey", "#B9FA9A", rev(plasma(max(p-1)))) ,   annotation_row = annotation_row, annotation_col = annotation_col, annotation_colors = annotation_colors, legend_breaks = 0:max(p), legend_labels = 0:max(p),  gaps_col = c(5,10,15,20), main =  "Number of cell (heat colors) per tcr clonotypes (rows) and per mouse and tissue origin (columns) for multisubsets clonotypes" , show_rownames = FALSE, cellwidth = 8 , cellheight = 8, fontsize_row = 7, filename = "cell_count_per_tcr_clonotype_per_subset_pheatmap2.pdf" )
+
+
+
+
+
+
+pf = t(t(p)/as.vector(colSums(tcr_rep_per_subset[,c(-1, -22)])))
+
+pheatmap(log10(pf+0.0001), cluster_rows = FALSE, cluster_cols = FALSE,  annotation_row = annotation_row, annotation_col = annotation_col, annotation_colors = annotation_colors, legend_breaks = c( -4, -3, -2.5 , -2 , log10(0.03)), legend_labels = c("0%","0.1%", "0.3%", "1%" , "3%"),  gaps_col = c(5,10,15,20), show_rownames = FALSE, main =  "Frequency (heat colors) of tcr clonotypes (rows) among per mouse and tissue origin subsets (columns) for multisubsets clonotypes")
+#pheatmap(log10(pf+0.0001), cluster_rows = FALSE, cluster_cols = FALSE,  annotation_row = annotation_row, annotation_col = annotation_col, annotation_colors = annotation_colors, legend_breaks = c( -4, -3, -2.5 , -2 , log10(0.03)), legend_labels = c("0%","0.1%", "0.3%", "1%" , "3%"), gaps_col = c(5,10,15,20), main =  "Frequency (heat colors) of tcr clonotypes (rows) among per mouse and tissue origin subsets (columns) for multisubsets clonotypes" , cellwidth = 8 , cellheight = 8, fontsize_row = 7, filename = "tcr_clonotype_frequency_per_subset_pheatmap.pdf" )
+
+```
+
+## Analyse Top20 tcr clonotypes per subset
+```{r Analyse Top20 tcr clonotypes per subset}
+
+for(i in 1:length(unique(tcr_rep$subset))){
+otcr_rep_per_subset = tcr_rep_per_subset[order(tcr_rep_per_subset[,i+1], decreasing = TRUE),]
+
+head(otcr_rep_per_subset) 
+
+p = as.matrix(otcr_rep_per_subset[1:20,2:21])
+pf = t(t(p)/as.vector(colSums(tcr_rep_per_subset[,c(-1, -22)])))
+
+annotation_col = data.frame(mouseId = rep(unique(tcr_rep$mouseId), each = 5), tissue_origin = rep(unique(tcr_rep$tissue_origin),4), cells_per_subset = as.vector(colSums(tcr_rep_per_subset[,c(-1, -22)])) , row.names = colnames(p))
+annotation_row = data.frame(IC95_include_0 = as.character(p[,i]<4), row.names = rownames(p))
+                        
+annotation_colors = list( mouseId = mouseId_color, tissue_origin = tissue_origin_color , IC95_include_0 = c("TRUE" = "firebrick1", "FALSE" = "forestgreen"))
+
+#pheatmap(p, cluster_rows = FALSE, cluster_cols = FALSE,  color = c("lightgrey", "#B9FA9A", rev(plasma(max(p-1)))), annotation_row = annotation_row,  annotation_col = annotation_col, annotation_colors = annotation_colors, legend_breaks = 0:max(p), legend_labels = 0:max(p),  gaps_col = c(5,10,15,20), main =  paste("Number of cell (heat colors) per tcr clonotypes (rows)\n and per mouse and tissue origin (columns)\n for TOP20 of",substring(colnames(p)[i], 1,nchar(colnames(p)[i])-6)) , cellwidth = 8 , cellheight = 8, fontsize_row = 7, filename = paste0("TOP20_tcr_clonotype_cell_count_per_subset_pheatmap_", substring(colnames(p)[i], 1,nchar(colnames(p)[i])-6),".pdf") )
+
+pheatmap(log10(pf+0.0001), cluster_rows = FALSE, cluster_cols = FALSE,  annotation_row = annotation_row, annotation_col = annotation_col, annotation_colors = annotation_colors, legend_breaks = c( -4, -3, -2.5 , -2 , log10(0.03)), legend_labels = c("0%","0.1%", "0.3%", "1%" , "3%"),  gaps_col = c(5,10,15,20), main =  paste("Frequency (heat colors) of tcr clonotypes (rows)\n and per mouse and tissue origin (columns)\n for TOP20 of",substring(colnames(p)[i], 1,nchar(colnames(p)[i])-6)) , cellwidth = 8 , cellheight = 8, fontsize_row = 7, filename = paste0("TOP20_tcr_frequencies_per_subset_pheatmap_", substring(colnames(p)[i], 1,nchar(colnames(p)[i])-6),".pdf"))
+}
+```
+
+## Analyse Top shared tcr clonotypes
+```{r Analyse Top20 tcr clonotypes per subset}
+
+otcr_rep_per_subset = tcr_rep_per_subset[order(tcr_rep_per_subset$posSubset, decreasing =  TRUE),]
+
+
+p = as.matrix(otcr_rep_per_subset[otcr_rep_per_subset$posSubset >= 2 ,2:(length(unique(tcr_rep$subset))+1)])
+
+
+
+annotation_row = data.frame(posSubset = as.character(tcr_rep_per_subset[tcr_rep_per_subset$posSubset >= 2, "posSubset"]), row.names = rownames(tcr_rep_per_subset[tcr_rep_per_subset$posSubset >= 2,]) )
+annotation_col = data.frame(mouseId = rep(unique(tcr_rep$mouseId), each = 5), tissue_origin = rep(unique(tcr_rep$tissue_origin),4), cells_per_subset = as.vector(colSums(tcr_rep_per_subset[,c(-1, -22)])) , row.names = colnames(p))
+
+annotation_colors = list( mouseId = mouseId_color, tissue_origin = tissue_origin_color , posSubset = c( "2" = "yellow2","3" = "orange1","4" = "orange3", "5" = "firebrick1","6" = "red3", "7" = "darkmagenta"))
+
+pheatmap(p, cluster_rows = FALSE, cluster_cols = FALSE,  color = c("lightgrey", "#B9FA9A", rev(plasma(max(p-1)))), annotation_row = annotation_row,  annotation_col = annotation_col, annotation_colors = annotation_colors, legend_breaks = 0:max(p), legend_labels = 0:max(p),  gaps_col = c(5,10,15,20) , cellwidth = 8 , cellheight = 8, fontsize_row = 7, filename = paste0("TOPshared_tcr_clonotype_cell_count_per_subset_pheatmap.pdf") )
+
+
+
+```
+
+
+
+
+
+
+
+
+
+## Annotate clonotypes
+```{r Annotate clonotypes}
+tcr_rep_per_subset$posSubset_ALX24_1b = as.numeric(as.logical(tcr_rep_per_subset[,2]))
+for (i in 3:6){
+  tcr_rep_per_subset$posSubset_ALX24_1b = tcr_rep_per_subset$posSubset_ALX24_1b + as.numeric(as.logical(tcr_rep_per_subset[,i]))
+}
+tcr_rep_per_subset$posSubset_ALX24_1c = as.numeric(as.logical(tcr_rep_per_subset[,7]))
+for (i in 8:11){
+  tcr_rep_per_subset$posSubset_ALX24_1c = tcr_rep_per_subset$posSubset_ALX24_1c + as.numeric(as.logical(tcr_rep_per_subset[,i]))
+}
+tcr_rep_per_subset$posSubset_ALX24_1d = as.numeric(as.logical(tcr_rep_per_subset[,12]))
+for (i in 13:16){
+  tcr_rep_per_subset$posSubset_ALX24_1d = tcr_rep_per_subset$posSubset_ALX24_1d + as.numeric(as.logical(tcr_rep_per_subset[,i]))
+}
+tcr_rep_per_subset$posSubset_ALX24_1e = as.numeric(as.logical(tcr_rep_per_subset[,17]))
+for (i in 18:21){
+  tcr_rep_per_subset$posSubset_ALX24_1e = tcr_rep_per_subset$posSubset_ALX24_1e + as.numeric(as.logical(tcr_rep_per_subset[,i]))
+}
+tcr_rep_per_subset$posSubset_Blood = as.numeric(as.logical(tcr_rep_per_subset[,2]))
+for (i in seq(7,17, by = 5)){
+  tcr_rep_per_subset$posSubset_Blood = tcr_rep_per_subset$posSubset_Blood + as.numeric(as.logical(tcr_rep_per_subset[,i]))
+}
+tcr_rep_per_subset$posSubset_Kidney = as.numeric(as.logical(tcr_rep_per_subset[,3]))
+for (i in seq(8,18, by = 5)){
+  tcr_rep_per_subset$posSubset_Kidney = tcr_rep_per_subset$posSubset_Kidney + as.numeric(as.logical(tcr_rep_per_subset[,i]))
+}
+tcr_rep_per_subset$posSubset_Liver = as.numeric(as.logical(tcr_rep_per_subset[,4]))
+for (i in seq(9,19, by = 5)){
+  tcr_rep_per_subset$posSubset_Liver = tcr_rep_per_subset$posSubset_Liver + as.numeric(as.logical(tcr_rep_per_subset[,i]))
+}
+tcr_rep_per_subset$posSubset_LPL = as.numeric(as.logical(tcr_rep_per_subset[,5]))
+for (i in seq(10,20, by = 5)){
+  tcr_rep_per_subset$posSubset_LPL = tcr_rep_per_subset$posSubset_LPL + as.numeric(as.logical(tcr_rep_per_subset[,i]))
+}
+tcr_rep_per_subset$posSubset_Pancreas = as.numeric(as.logical(tcr_rep_per_subset[,6]))
+for (i in seq(11,21, by = 5)){
+  tcr_rep_per_subset$posSubset_Pancreas = tcr_rep_per_subset$posSubset_Pancreas + as.numeric(as.logical(tcr_rep_per_subset[,i]))
+}
+
+tcr_rep_per_subset$tissueShared_clonotype = as.numeric(as.logical(tcr_rep_per_subset[,23]))
+for (i in 24:26){
+  tcr_rep_per_subset$tissueShared_clonotype = tcr_rep_per_subset$tissueShared_clonotype + as.numeric(as.logical(tcr_rep_per_subset[,i]))
+}
+tcr_rep_per_subset$tissueShared_clonotype = as.logical(tcr_rep_per_subset$tissueShared_clonotype-1)
+
+
+tcr_rep_per_subset$miceShared_clonotype = as.numeric(as.logical(tcr_rep_per_subset[,27]))
+for (i in 28:31){
+  tcr_rep_per_subset$miceShared_clonotype = tcr_rep_per_subset$miceShared_clonotype + as.numeric(as.logical(tcr_rep_per_subset[,i]))
+}
+tcr_rep_per_subset$miceShared_clonotype = as.logical(tcr_rep_per_subset$miceShared_clonotype-1)
+
+
+write.table(tcr_rep_per_subset, file='tcr_rep_per_subset.tsv', quote=FALSE, sep='\t', col.names = NA)
+
+```
+
+## Chord diagram
+```{r Chord diagram}
+## create per cell and per subset rep and compute subset clonotype count in per subset rep
+perCell_rep = tcr_rep
+perCell_rep$subset = paste0(perCell_rep$tissue_origin, "_", perCell_rep$mouseId) ## change subset syntaxe
+perCell_rep$count = 1
+perCell_rep$subset_clonotype = paste(perCell_rep$subset, perCell_rep$tcr_full, sep = "_" )
+perSubset_rep = aggregate(perCell_rep[,"count"], by = list(subset_clonotype = perCell_rep$subset_clonotype, subset = perCell_rep$subset, tcr_full = perCell_rep$tcr_full, tissue_origin = perCell_rep$tissue_origin, mouseId = perCell_rep$mouseId ), sum)
+rownames(perSubset_rep) = perSubset_rep$subset_clonotype
+colnames(perSubset_rep)[colnames(perSubset_rep) == "x"] = "sc_count"
+
+## sort perSubset_rep by subset and subset clonotype count  ## (optional: QC)
+perSubset_rep = perSubset_rep[order(perSubset_rep$sc_count, decreasing = TRUE),]
+perSubset_rep = perSubset_rep[order(perSubset_rep$subset),]
+
+## copy subset clonotype count to perCell_rep
+perCell_rep$sc_count = 0
+for(i in 1:dim(perCell_rep)[1]){
+  perCell_rep$sc_count[i] = perSubset_rep[perCell_rep$subset_clonotype[i], "sc_count"]
+}
+
+## add per subset rank to perCell_rep
+perCell_rep = perCell_rep[order(perCell_rep$subset_clonotype ),]
+perCell_rep = perCell_rep[order(perCell_rep$sc_count, decreasing = TRUE),]
+perCell_rep = perCell_rep[order(perCell_rep$subset),]
+perCell_rep$s_rank = 1
+for(i in 2:dim(perCell_rep)[1]){
+  if(perCell_rep$subset[i] == perCell_rep$subset[i-1] ){perCell_rep$s_rank[i] = perCell_rep$s_rank[i-1]+1}
+}
+
+## get rank start and end for each subset clonotype
+
+perSubset_rep_start = aggregate(perCell_rep[,"s_rank"], by = list(subset_clonotype = perCell_rep$subset_clonotype, subset = perCell_rep$subset), min)
+perSubset_rep_start = perSubset_rep_start[order(perSubset_rep_start$subset_clonotype),]
+
+perSubset_rep_end = aggregate(perCell_rep[,"s_rank"], by = list(subset_clonotype = perCell_rep$subset_clonotype, subset = perCell_rep$subset), max)
+perSubset_rep_end = perSubset_rep_end[order(perSubset_rep_end$subset_clonotype),]
+
+perSubset_rep = perSubset_rep[order(perSubset_rep$subset_clonotype),]
+perSubset_rep$start = perSubset_rep_start$x
+perSubset_rep$end = perSubset_rep_end$x
+
+## sort perSubset_rep by subset and subset clonotype count
+perSubset_rep = perSubset_rep[order(perSubset_rep$sc_count, decreasing = TRUE),]
+perSubset_rep = perSubset_rep[order(perSubset_rep$subset),]
+
+
+## create subset_df for color mapping
+subset_df = data.frame(subset = unique(perCell_rep$subset), mouseId = paste(as.vector(as.data.frame(t(as.data.frame(strsplit(unique(perCell_rep$subset),"_"))), stringAsfactors = FALSE)[[2]]), as.vector(as.data.frame(t(as.data.frame(strsplit(unique(perCell_rep$subset),"_"))))[[3]]), sep = "_") , tissue_origin = as.data.frame(t(as.data.frame(strsplit(unique(perCell_rep$subset),"_"))))[1] )
+colnames(subset_df)[3] = "tissue_origin"
+
+for(i in 1:(dim(subset_df)[1]) ){
+  subset_df$mouseId_color[i] = mouseId_color[subset_df$mouseId[i]] 
+  subset_df$tissue_origin_color[i] = tissue_origin_color[subset_df$tissue_origin[i]] 
+}
+
+subset_df$mouseId_color = paste0(substring(subset_df$mouseId_color, 1, 7), "66") # add transparency to mouseId_color 
+
+
+## Create Chord diagram
+
+for(tissue in unique(subset_df$tissue_origin)){ 
+  pdf(paste0("Chord_diagram_",tissue,"_shared_tcr_clonotypes.pdf"), width = 12, height = 12)
+  g = 0
+  p = 0
+  b = 0
+  circos.par("track.height" = 0.10, "clock.wise" = TRUE, start.degree = 90 , points.overflow.warning = FALSE, gap.degree = c(rep(c(0,0,0,2), 4), 0,0,0,4) , track.margin = c(0, 0))    # define track heigh,
+  circos.initialize(factors = perCell_rep$subset, x = perCell_rep$s_rank)      # define sector (factor) and circular coordinates (x)
+  circos.track(ylim = c(0, 1), factors = perCell_rep$subset, bg.col = subset_df$tissue_origin_color, track.height = 0.05)
+  for(t in unique(subset_df$tissue_origin) ){
+  highlight.sector(subset_df[subset_df$tissue_origin == t,"subset"], track.index = 1, col = tissue_origin_color[t], text = t, cex = 1, text.col = "white", niceFacing = TRUE)
+  }
+  circos.track(ylim = c(0, 1), factors = perCell_rep$subset, bg.col = subset_df$mouseId_color, track.height = 0.05 )
+  
+  circos.track(factors = perCell_rep$subset, x = perCell_rep$s_rank,  y = perCell_rep$sc_count, panel.fun = function(x, y) {      # define sector (factor), radial coordinates (y) and panel function
+          #circos.text(CELL_META$xcenter, CELL_META$cell.ylim[2] + uy(35, "mm"), CELL_META$sector.index,facing = "clockwise", niceFacing = TRUE)     # add sector indexes (x,y, labels)
+          circos.axis(h = "top", labels.facing = "reverse.clockwise", direction = "outside", major.at = c(1,seq(0,1000, by = 100)), labels.cex = 0.6)                 # add ticks and axis values
+          circos.lines(x, y, area = TRUE)
+          })
+  circos.yaxis(sector.index = perCell_rep$subset[1], labels.cex = 0.6, at = c(1, 10, max(perSubset_rep$sc_count)))
+  
+  for(k in unique(perSubset_rep[perSubset_rep$tissue_origin == tissue,"subset"]) ){
+      Subset_rep = perSubset_rep[perSubset_rep$subset == k, ]
+      NonSubset_rep = perSubset_rep[!perSubset_rep$subset == k, ]
+      for(i in 1:dim(Subset_rep)[1]){
+        for (s in unique(NonSubset_rep$subset))
+          if(sum(NonSubset_rep$tcr_full == Subset_rep$tcr_full[i] & NonSubset_rep$subset == s) == 1){ 
+            j = NonSubset_rep$tcr_full == Subset_rep$tcr_full[i] & NonSubset_rep$subset == s
+            col = "#18181F99"
+            if(Subset_rep$mouseId[i] == NonSubset_rep$mouseId[j]){
+              col = "#83C2B099"
+              g = g+1
+              }
+            if(Subset_rep$tissue_origin[i] == NonSubset_rep$tissue_origin[j]){
+              col = "#f279de99"
+              p = p +1
+            }
+            if(col == "#18181F99"){b = b+1}
+            circos.link(k , c(Subset_rep$start[i],Subset_rep$end[i]), s , c(NonSubset_rep$start[j], NonSubset_rep$end[j]), col = col)
+            }
+      }
+  }
+  
+  title(paste0(tissue," shared tcr clonotypes"))
+  legend("topright", legend = c(paste0("= mouse != tissues (", g, ")"),paste0("!= mice  = tissue  (", p, ")"), paste0("!= mice  != tissues (", b, ")")), col = c("#83C2B099","#f279de99", "#18181F99"), lty=1, bty = "n" )
+  legend("topleft", legend = c("For each subset:","- Circular axis: cell rank per CDR3 frequency", "- Radial axis: count of cells with same CDR3"), bty = "n")
+  circos.clear()
+  dev.off()
+}
+
+
+
+
+
+## export table for downstream analysis
+
+for(i in 1:dim(perCell_rep)[1]){
+perCell_rep$clonotype_freq_among_mouse_tissue_subset[i] = round(perCell_rep$sc_count[i]/table(perCell_rep$subset)[[perCell_rep$subset[i]]],4)
+}
+perCell_rep$clonotype_count_among_mouse_tissue_subset = perCell_rep$sc_count
+
+write.table(perCell_rep[,c("clonotype_count_among_mouse_tissue_subset","clonotype_freq_among_mouse_tissue_subset")], file="tcr_clonotype_count_and_freq_per_subset.tsv", quote=FALSE, sep='\t', col.names = NA)
+
+for(i in 1:dim(perCell_rep)[1]){
+  perCell_rep$posSubset[i] = tcr_rep_per_subset$posSubset[tcr_rep_per_subset$tcr_full == perCell_rep$tcr_full[i]]
+  perCell_rep$tissueShared_clonotype[i] = tcr_rep_per_subset$tissueShared_clonotype[tcr_rep_per_subset$tcr_full == perCell_rep$tcr_full[i]]
+  perCell_rep$miceShared_clonotype[i] = tcr_rep_per_subset$miceShared_clonotype[tcr_rep_per_subset$tcr_full == perCell_rep$tcr_full[i]]
+  perCell_rep$posSubset_Blood_clonotype[i] = tcr_rep_per_subset$posSubset_Blood[tcr_rep_per_subset$tcr_full == perCell_rep$tcr_full[i]]
+  perCell_rep$posSubset_Kidney_clonotype[i] = tcr_rep_per_subset$posSubset_Kidney[tcr_rep_per_subset$tcr_full == perCell_rep$tcr_full[i]]
+  perCell_rep$posSubset_Liver_clonotype[i] = tcr_rep_per_subset$posSubset_Liver[tcr_rep_per_subset$tcr_full == perCell_rep$tcr_full[i]]
+  perCell_rep$posSubset_LPL_clonotype[i] = tcr_rep_per_subset$posSubset_LPL[tcr_rep_per_subset$tcr_full == perCell_rep$tcr_full[i]]
+  perCell_rep$posSubset_Pancreas_clonotype[i] = tcr_rep_per_subset$posSubset_Pancreas[tcr_rep_per_subset$tcr_full == perCell_rep$tcr_full[i]]
+  
+}
+
+write.table(perCell_rep[,c("clonotype_count_among_mouse_tissue_subset","clonotype_freq_among_mouse_tissue_subset", "posSubset", "tissueShared_clonotype", "miceShared_clonotype", "posSubset_Blood_clonotype", "posSubset_Kidney_clonotype" , "posSubset_Liver_clonotype", "posSubset_LPL_clonotype" , "posSubset_Pancreas_clonotype" )], file="tcr_clonotype_count_and_freq_per_subset_posSubset_sharing.tsv", quote=FALSE, sep='\t', col.names = NA)
+
+
+
+## Create sharing tables ##
+
+perSubset_rep$subset2 = paste(perSubset_rep$mouseId, perSubset_rep$tissue_origin) 
+
+rep = perSubset_rep[,c("tcr_full", "subset2", "sc_count")]
+
+#rep = df[,c("peptide", "origin", "Spectral_count")]
+colnames(rep) = c("element_ID", "group", "count")
+
+groups_x = sort(as.vector(unique(rep$group)))
+groups_y = sort(as.vector(unique(rep$group)))
+
+sharing_heatmap_df = data.frame(group_x = rep(groups_x, each = length(groups_y)), group_y = rep(groups_y, length(groups_x)), stringsAsFactors =  FALSE)
+
+for( i in 1:dim(sharing_heatmap_df)[1]){
+  group_x = sharing_heatmap_df$group_x[i]
+  group_y = sharing_heatmap_df$group_y[i]
+  
+  rep_group_x = rep[rep$group == group_x,]
+  rep_group_y = rep[rep$group == group_y,]
+  
+  shared_group_x_group_y = merge(rep_group_x, rep_group_y, by = "element_ID")
+  
+  group_y_shared_count_fraction = sum(shared_group_x_group_y$count.y)/sum(rep_group_y$count)
+  group_y_shared_element_fraction = dim(shared_group_x_group_y)[1]/dim(rep_group_y)[1]
+  
+  sharing_heatmap_df$group_y_shared_count_fraction[i] = group_y_shared_count_fraction
+  sharing_heatmap_df$group_y_shared_element_fraction[i] = group_y_shared_element_fraction
+}
+
+perGroup_count = aggregate(rep$count, by = list(group = rep$group), FUN = "sum" )
+Labels_1 = sort(paste0( perGroup_count[,1], rep(" (n=", dim(perGroup_count)[1]),perGroup_count[,2], rep(")", dim(perGroup_count)[1]) ))
+
+ggplot(sharing_heatmap_df) +
+  ggtitle("Percentage of Group_1 cells sharing TCR with Group_2\n")+
+  scale_x_discrete("Group 2", position = "top", expand = c(0,0), labels = Labels_1)+
+  scale_y_discrete("Group 1" , limits = rev(sort(unique(sharing_heatmap_df$group_y))), expand = c(0,0), labels = rev(Labels_1) )+
+  scale_fill_gradientn(colors = c("lightgrey",rev(viridis(3))), values = c(0, 0.001, 0.01, 0.1 ,1) )+
+  geom_tile(aes(x = group_x, y = group_y, fill = group_y_shared_count_fraction))+
+  geom_text(aes(x = group_x, y = group_y, label = round(group_y_shared_count_fraction*100,1) )) +
+  geom_rect(xmin = 0.5, xmax = 5.5, ymin = 15.5, ymax = 20.5, fill = NA, color = "firebrick1", size = 1)+
+  geom_rect(xmin = 0.5+5, xmax = 5.5+5, ymin = 15.5-5, ymax = 20.5-5, fill = NA, color = "firebrick1", size = 1)+
+  geom_rect(xmin = 0.5+10, xmax = 5.5+10, ymin = 15.5-10, ymax = 20.5-10, fill = NA, color = "firebrick1", size = 1)+
+  geom_rect(xmin = 0.5+15, xmax = 5.5+15, ymin = 15.5-15, ymax = 20.5-15, fill = NA, color = "firebrick1", size = 1)+
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold" ),
+        axis.text.x=element_text(angle=30, hjust=0),
+        legend.position = "none",
+        panel.border = element_blank(),
+        plot.margin=unit(c(0,1.5,0.8,0.2),"cm"))
+ggsave("Sharing_heatmap_per_cell.pdf", width = 21, height = 21 , units = "cm", useDingbats=FALSE)
+
+
+## add sharing half split
+
+half_sample_sharing = c(6.7,15.5,8.4,6.7,14,8.4,14.7,15.5,19.5,18.7,9.7,11.5,16,14.9,4.1,2.4,17.7,17.7,9,8.8 )
+hss = data.frame(group_y = unique(sharing_heatmap_df$group_x), group_x = rep("half_sample",20),  group_y_shared_count_fraction = half_sample_sharing/100 ,  group_y_shared_element_fraction = rep(1,20))
+
+sharing_heatmap_df =rbind(sharing_heatmap_df,hss)
+
+ggplot(sharing_heatmap_df ) +
+  ggtitle("Percentage of Group_1 cells sharing TCR with Group_2\n")+
+  scale_x_discrete("Group 2", position = "top", expand = c(0,0), labels = c(Labels_1,"half-samples"))+
+  scale_y_discrete("Group 1" , limits = rev(sort(unique(sharing_heatmap_df$group_y))), expand = c(0,0), labels = rev(Labels_1) )+
+  scale_fill_gradientn(colors = c("lightgrey",rev(viridis(3))), values = c(0, 0.001, 0.01, 0.1 ,1) )+
+  geom_tile(aes(x = group_x, y = group_y, fill = group_y_shared_count_fraction))+
+  geom_text(aes(x = group_x, y = group_y, label = round(group_y_shared_count_fraction*100,1) )) +
+  geom_rect(xmin = 0.5, xmax = 5.5, ymin = 15.5, ymax = 20.5, fill = NA, color = "firebrick1", size = 1)+
+  geom_rect(xmin = 0.5+5, xmax = 5.5+5, ymin = 15.5-5, ymax = 20.5-5, fill = NA, color = "firebrick1", size = 1)+
+  geom_rect(xmin = 0.5+10, xmax = 5.5+10, ymin = 15.5-10, ymax = 20.5-10, fill = NA, color = "firebrick1", size = 1)+
+  geom_rect(xmin = 0.5+15, xmax = 5.5+15, ymin = 15.5-15, ymax = 20.5-15, fill = NA, color = "firebrick1", size = 1)+
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold" ),
+        axis.text.x=element_text(angle=30, hjust=0),
+        legend.position = "none",
+        panel.border = element_blank(),
+        plot.margin=unit(c(0,1.5,0.8,0.2),"cm"))
+ggsave("Sharing_heatmap_per_cell2.pdf", width = 21, height = 21 , units = "cm", useDingbats=FALSE)
+
+
+## normalize by half-samples sharing
+sharing_heatmap_df$norm_group_y_shared_count_fraction = (sharing_heatmap_df$group_y_shared_count_fraction +0.000001)/ rep(half_sample_sharing, 21) #  
+sharing_heatmap_df$norm_group_y_shared_count_fraction[sharing_heatmap_df$norm_group_y_shared_count_fraction<0.0001]=0
+
+
+ggplot(sharing_heatmap_df ) +
+  ggtitle("Group_1 cells sharing TCR with Group_2 normalized to half-samples sharing\n")+
+  scale_x_discrete("Group 2", position = "top", expand = c(0,0), labels = c(Labels_1,"half-samples"))+
+  scale_y_discrete("Group 1" , limits = rev(sort(unique(sharing_heatmap_df$group_y))), expand = c(0,0), labels = rev(Labels_1) )+
+  scale_fill_gradientn(colors = c("lightgrey",rev(viridis(3))), values = c(0, 0.001, 0.01, 0.1 ,1) )+
+  geom_tile(aes(x = group_x, y = group_y, fill = norm_group_y_shared_count_fraction))+
+  geom_text(aes(x = group_x, y = group_y, label = round(norm_group_y_shared_count_fraction*100,2) )) +
+  geom_rect(xmin = 0.5, xmax = 5.5, ymin = 15.5, ymax = 20.5, fill = NA, color = "firebrick1", size = 1)+
+  geom_rect(xmin = 0.5+5, xmax = 5.5+5, ymin = 15.5-5, ymax = 20.5-5, fill = NA, color = "firebrick1", size = 1)+
+  geom_rect(xmin = 0.5+10, xmax = 5.5+10, ymin = 15.5-10, ymax = 20.5-10, fill = NA, color = "firebrick1", size = 1)+
+  geom_rect(xmin = 0.5+15, xmax = 5.5+15, ymin = 15.5-15, ymax = 20.5-15, fill = NA, color = "firebrick1", size = 1)+
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold" ),
+        axis.text.x=element_text(angle=30, hjust=0),
+        legend.position = "none",
+        panel.border = element_blank(),
+        plot.margin=unit(c(0,1.5,0.8,0.2),"cm"))
+ggsave("Sharing_heatmap_per_cell_norm.pdf", width = 25, height = 22 , units = "cm", useDingbats=FALSE)
+
+## average SW-NE diagonal
+
+for (i in 1:dim(sharing_heatmap_df)[1] ){
+
+if( sharing_heatmap_df$group_x[i] != "half_sample"){
+  v1 = sharing_heatmap_df$norm_group_y_shared_count_fraction[i]
+  v2 = sharing_heatmap_df$norm_group_y_shared_count_fraction[sharing_heatmap_df$group_x == sharing_heatmap_df$group_y[i] & sharing_heatmap_df$group_y == sharing_heatmap_df$group_x[i]]
+
+  sharing_heatmap_df$mean_norm_group_y_shared_count_fraction[i] = (v1 + v2) /2
+  sharing_heatmap_df$sd_norm_group_y_shared_count_fraction[i] = sd(c(v1,v2))
+  sharing_heatmap_df$rsd_norm_group_y_shared_count_fraction[i] = sharing_heatmap_df$sd_norm_group_y_shared_count_fraction[i]/sharing_heatmap_df$mean_norm_group_y_shared_count_fraction[i]
+  }
+}
+
+sharing_heatmap_df$mean_norm_group_y_shared_count_fraction[is.na(sharing_heatmap_df$mean_norm_group_y_shared_count_fraction)] = 0
+
+
+ggplot(sharing_heatmap_df[sharing_heatmap_df$group_x != "half_sample",] ) +
+  ggtitle("Symetric mean: Group_1 cells sharing TCR with Group_2 normalized to half-samples sharing\n")+
+  scale_x_discrete("Group 2", position = "top", expand = c(0,0), labels = Labels_1)+
+  scale_y_discrete("Group 1" , limits = rev(sort(unique(sharing_heatmap_df$group_y))), expand = c(0,0), labels = rev(Labels_1) )+
+  scale_fill_gradientn(colors = c("lightgrey",rev(viridis(3))), values = c(0, 0.001, 0.01, 0.1 ,1) )+
+  geom_tile(aes(x = group_x, y = group_y, fill = mean_norm_group_y_shared_count_fraction))+
+  geom_text(aes(x = group_x, y = group_y, label = round(mean_norm_group_y_shared_count_fraction*100,1) )) +
+  geom_rect(xmin = 0.5, xmax = 5.5, ymin = 15.5, ymax = 20.5, fill = NA, color = "firebrick1", size = 1)+
+  geom_rect(xmin = 0.5+5, xmax = 5.5+5, ymin = 15.5-5, ymax = 20.5-5, fill = NA, color = "firebrick1", size = 1)+
+  geom_rect(xmin = 0.5+10, xmax = 5.5+10, ymin = 15.5-10, ymax = 20.5-10, fill = NA, color = "firebrick1", size = 1)+
+  geom_rect(xmin = 0.5+15, xmax = 5.5+15, ymin = 15.5-15, ymax = 20.5-15, fill = NA, color = "firebrick1", size = 1)+
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold" ),
+        axis.text.x=element_text(angle=30, hjust=0),
+        legend.position = "none",
+        panel.border = element_blank(),
+        plot.margin=unit(c(0,1.5,0.8,0.2),"cm"))
+
+ggsave("Sharing_heatmap_per_cell_mean_norm.pdf", width = 22, height = 22 , units = "cm", useDingbats=FALSE)
+
+
+ggplot(sharing_heatmap_df[sharing_heatmap_df$group_x != "half_sample",] ) +
+  ggtitle("Symetric relative sd: Group_1 cells sharing TCR with Group_2\n")+
+  scale_x_discrete("Group 2", position = "top", expand = c(0,0), labels = Labels_1)+
+  scale_y_discrete("Group 1" , limits = rev(sort(unique(sharing_heatmap_df$group_y))), expand = c(0,0), labels = rev(Labels_1) )+
+  scale_fill_gradientn(colors = c("lightgrey",rev(viridis(3))), values = c(0, 0.001, 0.01, 0.1 ,1) )+
+  geom_tile(aes(x = group_x, y = group_y, fill = rsd_norm_group_y_shared_count_fraction))+
+  geom_text(aes(x = group_x, y = group_y, label = round(rsd_norm_group_y_shared_count_fraction*100,0) )) +
+  geom_rect(xmin = 0.5, xmax = 5.5, ymin = 15.5, ymax = 20.5, fill = NA, color = "firebrick1", size = 1)+
+  geom_rect(xmin = 0.5+5, xmax = 5.5+5, ymin = 15.5-5, ymax = 20.5-5, fill = NA, color = "firebrick1", size = 1)+
+  geom_rect(xmin = 0.5+10, xmax = 5.5+10, ymin = 15.5-10, ymax = 20.5-10, fill = NA, color = "firebrick1", size = 1)+
+  geom_rect(xmin = 0.5+15, xmax = 5.5+15, ymin = 15.5-15, ymax = 20.5-15, fill = NA, color = "firebrick1", size = 1)+
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold" ),
+        axis.text.x=element_text(angle=30, hjust=0),
+        legend.position = "none",
+        panel.border = element_blank(),
+        plot.margin=unit(c(0,1.5,0.8,0.2),"cm"))
+
+ggsave("Sharing_heatmap_per_cell_rsd_norm.pdf", width = 22, height = 22 , units = "cm", useDingbats=FALSE)
+
+
+# get mouseId and Tissue_origin separately
+
+for (i in 1:dim(sharing_heatmap_df)[1] ){
+
+if( sharing_heatmap_df$group_x[i] != "half_sample"){
+  sharing_heatmap_df$group_x_mouse[i] = strsplit(sharing_heatmap_df$group_x[i], " ")[[1]][1]
+  sharing_heatmap_df$group_x_tissue[i] = strsplit(sharing_heatmap_df$group_x[i], " ")[[1]][2]
+  sharing_heatmap_df$group_y_mouse[i] = strsplit(sharing_heatmap_df$group_y[i], " ")[[1]][1]
+  sharing_heatmap_df$group_y_tissue[i] = strsplit(sharing_heatmap_df$group_y[i], " ")[[1]][2]
+  }
+}
+sharing_heatmap_df$tissue_comp = paste0(sharing_heatmap_df$group_x_tissue, ":",sharing_heatmap_df$group_y_tissue)
+
+## create summary_df
+
+mice = unique(sharing_heatmap_df$group_x_mouse)
+tissues = unique(sharing_heatmap_df$group_x_tissue)
+
+unique_tissue_combination = c()
+for (i in 1:length(tissues)){
+  for (j in 1:length(tissues)){
+    if(i!=j & i<j){unique_tissue_combination = c(unique_tissue_combination , paste0(tissues[i], " ", tissues[j] ))
+    }
+  }
+}
+
+summary_df = as.data.frame(t(as.data.frame(strsplit(unique_tissue_combination, " "))))
+colnames(summary_df) = c("tissue1", "tissue2")
+summary_df$tissue_comp = paste0(summary_df$tissue1, ":", summary_df$tissue2)
+
+## fill summary_df
+
+intra_mouse_sharing_df = sharing_heatmap_df[sharing_heatmap_df$group_x_mouse == sharing_heatmap_df$group_y_mouse, ]
+
+for (i in 1:dim(summary_df)[1]){
+  values = intra_mouse_sharing_df$mean_norm_group_y_shared_count_fraction[intra_mouse_sharing_df$tissue_comp == summary_df$tissue_comp[i]]  
+  summary_df$mean[i] = mean(values)*100
+  summary_df$sd[i] = sd(values)*100 
+  summary_df$sem[i] = sd(values)/sqrt(length(values))*100
+}
+
+#plot 
+
+#summary_df$tissue_comp = factor(summary_df$tissue_comp, levels = rev(unique(summary_df$tissue_comp)))
+
+summary_df$tissue_comp = as.vector(summary_df$tissue_comp)
+summary_df$tissue_comp = factor(summary_df$tissue_comp, levels = summary_df$tissue_comp[order(summary_df$mean)])
+
+ggplot(summary_df) +
+  scale_x_continuous(name = "Relative TCR sharing",  expand = c(0,0), position = "top")+
+  scale_y_discrete(name = "")+
+  geom_bar(stat="identity", aes(y = tissue_comp, x = mean), fill="darkgrey" )+
+  geom_errorbar(aes(y=tissue_comp, xmin=mean-sem, xmax=mean+sem), width=0.4, colour="black", alpha=0.9 ) +
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 0), panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(), panel.border =element_blank(), 
+        axis.line.x = element_line(color="black"), axis.line.y = element_line(color="black"))
+
+ggsave("Relative_TCR_sharing_barplot2.pdf", width = 18, height = 10 , units = "cm", useDingbats=FALSE)
+
+summary_df$tissue_comp = as.vector(summary_df$tissue_comp)
+summary_df$tissue_comp = factor(summary_df$tissue_comp, levels = summary_df$tissue_comp[order(-summary_df$mean)])
+
+ggplot(summary_df) +
+  scale_y_continuous(name = "Relative TCR sharing",  expand = c(0,0))+
+  scale_x_discrete(name = "")+
+  geom_bar(stat="identity", aes(x = tissue_comp, y = mean), fill="darkgrey" )+
+  geom_errorbar(aes(x=tissue_comp, ymin=mean-sem, ymax=mean+sem), width=0.4, colour="black", alpha=0.9 ) +
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(), panel.border =element_blank(), 
+        axis.line.x = element_line(color="black"), axis.line.y = element_line(color="black"))
+
+ggsave("Relative_TCR_sharing_barplot1.pdf", width = 18, height = 14 , units = "cm", useDingbats=FALSE)
+
+
+
+
+
+####
+
+
+## create summary_df
+
+mice = unique(sharing_heatmap_df$group_x_mouse)
+tissues = unique(sharing_heatmap_df$group_x_tissue)
+
+unique_tissue_combination2 = c()
+for (i in 1:length(tissues)){
+  for (j in 1:length(tissues)){
+    if(i!=j ){unique_tissue_combination2 = c(unique_tissue_combination2 , paste0(tissues[i], " ", tissues[j] ))
+    }
+  }
+}
+
+summary_df2 = as.data.frame(t(as.data.frame(strsplit(unique_tissue_combination2, " "))))
+colnames(summary_df2) = c("tissue1", "tissue2")
+summary_df2$tissue_comp = paste0(summary_df2$tissue1, ":", summary_df2$tissue2)
+
+## fill summary_df
+
+intra_mouse_sharing_df = sharing_heatmap_df[sharing_heatmap_df$group_x_mouse == sharing_heatmap_df$group_y_mouse, ]
+
+for (i in 1:dim(summary_df2)[1]){
+  values = intra_mouse_sharing_df$norm_group_y_shared_count_fraction[intra_mouse_sharing_df$tissue_comp == summary_df2$tissue_comp[i]]  
+  summary_df2$mean[i] = mean(values)*100
+  summary_df2$sd[i] = sd(values)*100 
+  summary_df2$sem[i] = sd(values)/sqrt(length(values))*100
+}
+
+summary_df2$tissue_comp = as.vector(summary_df2$tissue_comp)
+summary_df2$tissue_comp = factor(summary_df2$tissue_comp, levels = summary_df2$tissue_comp[order(summary_df2$mean)])
+
+ggplot(summary_df2) +
+  scale_x_continuous(name = "Relative TCR sharing",  expand = c(0,0), position = "top")+
+  scale_y_discrete(name = "")+
+  geom_bar(stat="identity", aes(y = tissue_comp, x = mean), fill="darkgrey" )+
+  geom_errorbar(aes(y=tissue_comp, xmin=mean-sem, xmax=mean+sem), width=0.4, colour="black", alpha=0.9 ) +
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 0), panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(), panel.border =element_blank(), 
+        axis.line.x = element_line(color="black"), axis.line.y = element_line(color="black"))
+
+ggsave("Relative_TCR_sharing_barplot3.pdf", width = 18, height = 20 , units = "cm", useDingbats=FALSE)
+
+
+
+
+### Create plotctogone
+
+
+phi_origin_offset = -pi/2
+label_offset = 1.05
+scale_factor = 0.5
+
+gonidf = data.frame(g1 = as.vector(summary_df2$tissue1), g2 = as.vector(summary_df2$tissue2), value = as.vector(summary_df2$mean))
+
+#get group positions
+
+gposition = data.frame(g=unique(c(gonidf$g1, gonidf$g2)))
+gposition$order = 1:dim(gposition)[1]
+gposition$phi = -2*pi/5*(gposition$order-1) - phi_origin_offset
+gposition$L = 1
+gposition$x = gposition$L*cos(gposition$phi)
+gposition$y = gposition$L*sin(gposition$phi)
+gposition$xlab = gposition$L*label_offset*cos(gposition$phi)
+gposition$ylab = gposition$L*label_offset*sin(gposition$phi)
+
+
+plot = ggplot() +
+  scale_x_continuous(limits = c(-1.2,1.2))+
+  scale_y_continuous(limits = c(-1.2,1.2))+
+  #geom_point(data = gposition, aes(x = x, y = y))+
+  geom_text(data = gposition, aes(x = xlab, y = ylab, label = g, hjust = 0.5*(1-xlab), vjust = 0.5*(1-ylab)))+
+  theme_void()+
+  theme(legend.position="none")
+
+#process lines
+for(i in 1:dim(gonidf)[1]){
+  phi_ori = gposition$phi[gposition$g == gonidf$g1[i]]
+  phi_end = gposition$phi[gposition$g == gonidf$g2[i]]
+  if(phi_ori > phi_end){gonidf$phi[i] = -(pi/2- (phi_ori-phi_end)/2 - phi_end) }
+  if(phi_ori < phi_end){gonidf$phi[i] = -(pi/2- (phi_ori-phi_end)/2 - phi_end)-pi }
+  gonidf$ori_x[i] = gposition$x[gposition$g == gonidf$g1[i]]
+  gonidf$ori_y[i] = gposition$y[gposition$g == gonidf$g1[i]]
+}
+
+plot = plot + geom_segment(data = gonidf,  aes(x=ori_x, y=ori_y, xend=ori_x+scale_factor*value*cos(phi), yend=ori_y+scale_factor*value*sin(phi), color = g1), size = 1)
+plot
+
+ggsave("Plotctogone.pdf", width = 20, height = 20 , units = "cm", useDingbats=FALSE)
+
+
+#########
+
+
+
+
+
+
+
+
+
+
+sessionInfo()
+### Create plotctogone
+
+
+phi_origin_offset = -pi/2
+label_offset = 1.05
+scale_factor = 3.8
+
+
+temp_df = intra_mouse_sharing_df[ intra_mouse_sharing_df$group_x_tissue != intra_mouse_sharing_df$group_y_tissue,] #intra_mouse_sharing_df$group_x_mouse == "ALFX24_1b" &
+
+gonidf = data.frame(mouseId = as.vector(temp_df$group_x_mouse), tissue_origin = as.vector(temp_df$group_y_tissue),   g1 = as.vector(temp_df$group_y), g2 = as.vector(temp_df$group_x), value = as.vector(temp_df$group_y_shared_count_fraction))
+
+#get group positions
+
+gposition = data.frame(g= sort(unique(c(gonidf$g1, gonidf$g2))))
+gposition$order = 1:dim(gposition)[1]
+gposition$phi = -2*pi/5*(gposition$order-1) - phi_origin_offset
+gposition$L = 1
+gposition$x = gposition$L*cos(gposition$phi)
+gposition$y = gposition$L*sin(gposition$phi)
+gposition$xlab = gposition$L*label_offset*cos(gposition$phi)
+gposition$ylab = gposition$L*label_offset*sin(gposition$phi)
+gposition$to = as.data.frame(t(as.data.frame(strsplit(gposition$g," "))))[,2]
+
+plot = ggplot() +
+  scale_x_continuous(limits = c(-1.4,1.4))+
+  scale_y_continuous(limits = c(-1.4,1.4))+
+  scale_color_manual(values=tissue_origin_color)+
+
+  geom_text(data = gposition, aes(x = xlab, y = ylab, label = to, hjust = 0.5*(1-xlab), vjust = 0.5*(1-ylab)), size = 3)+
+  theme_void()+
+  theme(legend.position="none")
+
+#process lines
+for(i in 1:dim(gonidf)[1]){
+  phi_ori = gposition$phi[gposition$g == gonidf$g1[i]]
+  phi_end = gposition$phi[gposition$g == gonidf$g2[i]]
+  if(phi_ori > phi_end){gonidf$phi[i] = -(pi/2- (phi_ori-phi_end)/2 - phi_end) }
+  if(phi_ori < phi_end){gonidf$phi[i] = -(pi/2- (phi_ori-phi_end)/2 - phi_end)-pi }
+  gonidf$ori_x[i] = gposition$x[gposition$g == gonidf$g1[i]]
+  gonidf$ori_y[i] = gposition$y[gposition$g == gonidf$g1[i]]
+}
+
+plot = plot + geom_segment(data = gonidf,  aes(x=ori_x, y=ori_y, xend=ori_x+scale_factor*value*cos(phi), yend=ori_y+scale_factor*value*sin(phi),color = tissue_origin),
+                           arrow = arrow(length = unit(1.5, "mm")), lineend ="butt",  linejoin = "mitre", size = 0.5)  # , type = "closed"
+
+# add scale
+
+plot = plot + geom_segment(data = gonidf, x=-1, y=0.8, xend=-1+0.1*scale_factor, yend=0.8, color = "darkgrey",
+                           arrow = arrow(length = unit(1.5, "mm")), lineend ="butt",  linejoin = "mitre", size = 0.5) +  #, type = "closed"
+              geom_text(data = gonidf, x = -1+(0.1*scale_factor)/2, y = 0.87, label = "10% sharing", hjust = 0.5, vjust = 0, size = 2.5, color = "darkgrey", fontface = "plain")
+
+# add facet
+plot = plot + facet_grid(.~mouseId, labeller = labeller(mouseId = mouserename))
+plot
+
+ggsave("Plotctogones.pdf", width = 40, height = 10 , units = "cm", useDingbats=FALSE)
+
+
+
+### summary Sharogone (= pentashare = plotctogone)
+
+
+
+
+phi_origin_offset = -pi/2
+label_offset = 1.05
+scale_factor = 3.8
+
+
+temp_df = intra_mouse_sharing_df[ intra_mouse_sharing_df$group_x_tissue != intra_mouse_sharing_df$group_y_tissue,] #intra_mouse_sharing_df$group_x_mouse == "ALFX24_1b" &
+
+gonidf = data.frame(mouseId = as.vector(temp_df$group_x_mouse), tissue_origin = as.vector(temp_df$group_y_tissue),   g1 = as.vector(temp_df$group_y), g2 = as.vector(temp_df$group_x), value = as.vector(temp_df$group_y_shared_count_fraction))
+
+gonidf$g1t = as.data.frame(t(as.data.frame(strsplit(gonidf$g1," "))))[,2]
+gonidf$g2t = as.data.frame(t(as.data.frame(strsplit(gonidf$g2," "))))[,2]
+gonidf$gt = paste(gonidf$g1t, gonidf$g2t)
+
+sgonidf = data.frame(gt = unique(gonidf$gt))
+sgonidf$tissue_origin = as.data.frame(t(as.data.frame(strsplit(sgonidf$gt," "))))[,1]
+sgonidf$g1 = as.data.frame(t(as.data.frame(strsplit(sgonidf$gt," "))))[,1]
+sgonidf$g2 = as.data.frame(t(as.data.frame(strsplit(sgonidf$gt," "))))[,2]
+
+for (i in 1:dim(sgonidf)[1]){
+  sgonidf$value[i] = mean(gonidf$value[gonidf$gt == sgonidf$gt[i]])
+}
+
+
+#get group positions
+
+gposition = data.frame(g= sort(unique(c(sgonidf$g1, sgonidf$g2))))
+gposition$order = 1:dim(gposition)[1]
+gposition$phi = -2*pi/5*(gposition$order-1) - phi_origin_offset
+gposition$L = 1
+gposition$x = gposition$L*cos(gposition$phi)
+gposition$y = gposition$L*sin(gposition$phi)
+gposition$xlab = gposition$L*label_offset*cos(gposition$phi)
+gposition$ylab = gposition$L*label_offset*sin(gposition$phi)
+gposition$to = gposition$g
+
+plot = ggplot() +
+  scale_x_continuous(limits = c(-1.4,1.4))+
+  scale_y_continuous(limits = c(-1.4,1.4))+
+  scale_color_manual(values=tissue_origin_color)+
+
+  geom_text(data = gposition, aes(x = xlab, y = ylab, label = to, hjust = 0.5*(1-xlab), vjust = 0.5*(1-ylab)), size = 3)+
+  theme_void()+
+  theme(legend.position="none")
+
+#process lines
+for(i in 1:dim(sgonidf)[1]){
+  phi_ori = gposition$phi[gposition$g == sgonidf$g1[i]]
+  phi_end = gposition$phi[gposition$g == sgonidf$g2[i]]
+  if(phi_ori > phi_end){sgonidf$phi[i] = -(pi/2- (phi_ori-phi_end)/2 - phi_end) }
+  if(phi_ori < phi_end){sgonidf$phi[i] = -(pi/2- (phi_ori-phi_end)/2 - phi_end)-pi }
+  sgonidf$ori_x[i] = gposition$x[gposition$g == sgonidf$g1[i]]
+  sgonidf$ori_y[i] = gposition$y[gposition$g == sgonidf$g1[i]]
+}
+
+plot = plot + geom_segment(data = sgonidf,  aes(x=ori_x, y=ori_y, xend=ori_x+scale_factor*value*cos(phi), yend=ori_y+scale_factor*value*sin(phi),color = tissue_origin),
+                           arrow = arrow(length = unit(1.5, "mm")), lineend ="butt",  linejoin = "mitre", size = 0.5)  # , type = "closed"
+
+# add scale
+
+plot = plot + geom_segment(data = sgonidf, x=-1, y=0.8, xend=-1+0.1*scale_factor, yend=0.8, color = "darkgrey",
+                           arrow = arrow(length = unit(1.5, "mm")), lineend ="butt",  linejoin = "mitre", size = 0.5) +  #, type = "closed"
+              geom_text(data = sgonidf, x = -1+(0.1*scale_factor)/2, y = 0.87, label = "10% sharing", hjust = 0.5, vjust = 0, size = 2.5, color = "darkgrey", fontface = "plain")
+
+plot
+ggsave("Summary_pentashare.pdf", width = 10, height = 10 , units = "cm", useDingbats=FALSE)
+
+
+
+
+
+sessionInfo()
+
+
+```
+
+
+
+ 
